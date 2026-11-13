@@ -32,15 +32,18 @@ class AccountRegistry:
             for alias, credentials in sorted(self._settings.accounts.items())
         ]
 
-    def safe_health(self) -> dict[str, Any]:
-        return {
+    def safe_health(self, *, include_auth_diagnostics: bool = True) -> dict[str, Any]:
+        """Health payload; the unauthenticated HTTP route omits auth diagnostics."""
+        payload: dict[str, Any] = {
             "configured_accounts": [
                 {"alias": alias, "configured": True}
                 for alias in sorted(self._settings.accounts)
             ],
             "default_account": self._settings.default_account,
-            "auth_diagnostics": self._auth_diagnostics,
         }
+        if include_auth_diagnostics:
+            payload["auth_diagnostics"] = self._auth_diagnostics
+        return payload
 
     def get_read_client(self, account: str | None = None) -> KalorickeTabulkyClient:
         alias = self._resolve_read_alias(account)

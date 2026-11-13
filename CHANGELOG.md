@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+- Report connection failures and timeouts as tool errors
+  (`KalorickeTabulkyNetworkError`) instead of unhandled exceptions. A failed
+  write request sets `outcome_unknown: true`, and a batch keeps the results of
+  the items already written.
+- Omit cached auth diagnostics from the unauthenticated `/health` route; they
+  remain in the `health_check` and `list_accounts` MCP tools.
+- Declare MCP tool annotations (read-only, additive write, destructive) so
+  clients can tell reads from writes.
+- Publish the item fields of `record_food_batch.items` and recipe
+  `ingredients` in the tool input schema. Malformed items are now rejected by
+  MCP argument validation before the tool runs.
+
 ## 0.3.0
 
 Phases 2 and 3, first release from this fork

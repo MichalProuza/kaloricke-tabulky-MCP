@@ -8,6 +8,7 @@ import logging
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
+from mcp.types import ToolAnnotations
 from pydantic import ValidationError
 
 from .account_registry import AccountRegistry
@@ -16,6 +17,7 @@ from .clock import local_today
 from .concurrency import resolve_food_items
 from .errors import short_error
 from .models import (
+    BatchFoodItem,
     CreateCustomRecipeRequest,
     DiarySummaryRequest,
     DiaryRangeRequest,
@@ -26,6 +28,7 @@ from .models import (
     RecordFoodBatchRequest,
     RecordFoodRequest,
     RecordRecipeServingRequest,
+    RecipeIngredientItem,
     RecordWeightRequest,
     SearchFoodRequest,
     UploadCustomRecipeImageRequest,
@@ -33,14 +36,28 @@ from .models import (
 
 logger = logging.getLogger(__name__)
 
+# Client hints: reads need no confirmation, writes add data, and destructive
+# tools can overwrite or remove existing data. All tools call the external KT
+# service except the local config ones.
+_LOCAL = ToolAnnotations(readOnlyHint=True, openWorldHint=False)
+_READ = ToolAnnotations(readOnlyHint=True, openWorldHint=True)
+_WRITE = ToolAnnotations(
+    readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=True
+)
+_DESTRUCTIVE = ToolAnnotations(
+    readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=True
+)
+
 
 def setup_tools(mcp: FastMCP, registry: AccountRegistry) -> None:
     """Register public tools and opt-in diagnostics."""
     diagnostic = (
-        mcp.tool if registry.settings.enable_diagnostics else lambda: lambda func: func
+        mcp.tool
+        if registry.settings.enable_diagnostics
+        else lambda **kwargs: lambda func: func
     )
 
-    @mcp.tool()
+    @mcp.tool(annotations=_LOCAL)
     async def health_check() -> dict[str, Any]:
         """Check process/config liveness without logging in to KT. No parameters.
         Never writes; this does not validate remote account authentication.
@@ -51,7 +68,7 @@ def setup_tools(mcp: FastMCP, registry: AccountRegistry) -> None:
             **registry.safe_health(),
         }
 
-    @mcp.tool()
+    @mcp.tool(annotations=_LOCAL)
     async def list_accounts() -> dict[str, Any]:
         """Discover configured account aliases and masked email addresses before
         selecting an account. No parameters. Never writes or exposes
@@ -59,7 +76,7 @@ def setup_tools(mcp: FastMCP, registry: AccountRegistry) -> None:
         """
         return {"accounts": registry.list_accounts()}
 
-    @mcp.tool()
+    @mcp.tool(annotations=_READ)
     async def check_account_auth(account: str) -> dict[str, Any]:
         """Explicitly validate remote login for the required account alias. Makes
         a bounded authentication request and returns safe diagnostics; does
@@ -67,7 +84,7 @@ def setup_tools(mcp: FastMCP, registry: AccountRegistry) -> None:
         """
         return await registry.check_auth(account)
 
-    @diagnostic()
+    @diagnostic(annotations=_READ)
     async def probe_user_meal_endpoints(account: str) -> dict[str, Any]:
         """Inspect private custom recipe form metadata for the required account.
         Available only with KT_ENABLE_DIAGNOSTICS=true. Reads candidate pages
@@ -80,7 +97,7 @@ def setup_tools(mcp: FastMCP, registry: AccountRegistry) -> None:
         except (ValueError, KalorickeTabulkyError) as err:
             return _error(err)
 
-    @mcp.tool()
+    @mcp.tool(annotations=_READ)
     async def search_food(
         query: str,
         account: str | None = None,
@@ -105,7 +122,7 @@ def setup_tools(mcp: FastMCP, registry: AccountRegistry) -> None:
         except (ValidationError, ValueError, KalorickeTabulkyError) as err:
             return _error(err)
 
-    @mcp.tool()
+    @mcp.tool(annotations=_READ)
     async def list_custom_recipes(
         account: str,
         query: str = "",
@@ -128,7 +145,7 @@ def setup_tools(mcp: FastMCP, registry: AccountRegistry) -> None:
         except (ValidationError, ValueError, KalorickeTabulkyError) as err:
             return _error(err)
 
-    @mcp.tool()
+    @mcp.tool(annotations=_WRITE)
     async def record_food(
         account: str,
         date: str | None = None,
@@ -198,11 +215,11 @@ def setup_tools(mcp: FastMCP, registry: AccountRegistry) -> None:
         except (ValidationError, ValueError, KalorickeTabulkyError) as err:
             return _error(err)
 
-    @mcp.tool()
+    @mcp.tool(annotations=_WRITE)
     async def record_food_batch(
         account: str,
         date: str,
-        items: list[dict[str, Any]],
+        items: list[BatchFoodItem],
         default_meal_type: str | None = None,
         default_time: str | None = None,
         commit: bool = False,
@@ -328,11 +345,11 @@ def setup_tools(mcp: FastMCP, registry: AccountRegistry) -> None:
             "results": written_results,
         }
 
-    @mcp.tool()
+    @mcp.tool(annotations=_READ)
     async def prepare_recipe_import(
         account: str,
         title: str,
-        ingredients: list[dict[str, Any]],
+        ingredients: list[RecipeIngredientItem],
         servings: float | None = None,
         total_weight_g: float | None = None,
         source: str | None = None,
@@ -420,11 +437,11 @@ def setup_tools(mcp: FastMCP, registry: AccountRegistry) -> None:
             "resolved_ingredients": resolved_ingredients,
         }
 
-    @mcp.tool()
+    @mcp.tool(annotations=_DESTRUCTIVE)
     async def create_custom_recipe(
         account: str,
         title: str,
-        ingredients: list[dict[str, Any]],
+        ingredients: list[RecipeIngredientItem],
         servings: float | None = None,
         recipe_guid: str | None = None,
         preparation_time_minutes: int | None = None,
@@ -562,7 +579,7 @@ def setup_tools(mcp: FastMCP, registry: AccountRegistry) -> None:
             "next_step": "Use record_recipe_serving with recipe_guid to log a portion.",
         }
 
-    @mcp.tool()
+    @mcp.tool(annotations=_DESTRUCTIVE)
     async def upload_custom_recipe_image(
         account: str,
         recipe_guid: str,
@@ -622,7 +639,7 @@ def setup_tools(mcp: FastMCP, registry: AccountRegistry) -> None:
             return _error(err)
         return {**preview, "status": "written", "written_record": written}
 
-    @mcp.tool()
+    @mcp.tool(annotations=_WRITE)
     async def record_recipe_serving(
         account: str,
         date: str | None = None,
@@ -691,7 +708,7 @@ def setup_tools(mcp: FastMCP, registry: AccountRegistry) -> None:
         except (ValidationError, ValueError, KalorickeTabulkyError) as err:
             return _error(err)
 
-    @mcp.tool()
+    @mcp.tool(annotations=_READ)
     async def get_diary_range(account: str, date_from: str, date_to: str) -> dict[str, Any]:
         """Analyze daily nutrient trends over an inclusive range. Requires
         account, date_from and date_to in YYYY-MM-DD format, with at most 92
@@ -707,7 +724,7 @@ def setup_tools(mcp: FastMCP, registry: AccountRegistry) -> None:
         except (ValidationError, ValueError, KalorickeTabulkyError) as err:
             return _error(err)
 
-    @mcp.tool()
+    @mcp.tool(annotations=_READ)
     async def get_diary_entries(account: str, date: str | None = None) -> dict[str, Any]:
         """Read a compact diary grouped by meal, with per-meal and daily nutrient
         totals. Requires account; date uses YYYY-MM-DD and defaults to the
@@ -722,7 +739,7 @@ def setup_tools(mcp: FastMCP, registry: AccountRegistry) -> None:
         except (ValidationError, ValueError, KalorickeTabulkyError) as err:
             return _error(err)
 
-    @mcp.tool()
+    @mcp.tool(annotations=_DESTRUCTIVE)
     async def delete_diary_entry(account: str, date: str, entry_guid: str, commit: bool = False) -> dict[str, Any]:
         """Preview deletion of a diary entry and confirm its membership in the
         requested day. Requires account, YYYY-MM-DD date and entry_guid from
@@ -738,7 +755,7 @@ def setup_tools(mcp: FastMCP, registry: AccountRegistry) -> None:
         except (ValidationError, ValueError, KalorickeTabulkyError) as err:
             return _error(err)
 
-    @mcp.tool()
+    @mcp.tool(annotations=_READ)
     async def get_diary_summary(account: str | None = None, date: str | None = None) -> dict[str, Any]:
         """Read daily nutrition and weight metrics. account may use
         KT_DEFAULT_ACCOUNT; date uses YYYY-MM-DD and defaults to the local
@@ -755,7 +772,7 @@ def setup_tools(mcp: FastMCP, registry: AccountRegistry) -> None:
         except (ValidationError, ValueError, KalorickeTabulkyError) as err:
             return _error(err)
 
-    @diagnostic()
+    @diagnostic(annotations=_READ)
     async def get_diary_detail(account: str | None = None, date: str | None = None) -> dict[str, Any]:
         """Diagnose unsupported diary structures using the full raw daily
         payload, which is expensive in tokens. Requires
@@ -773,7 +790,7 @@ def setup_tools(mcp: FastMCP, registry: AccountRegistry) -> None:
         except (ValidationError, ValueError, KalorickeTabulkyError) as err:
             return _error(err)
 
-    @mcp.tool()
+    @mcp.tool(annotations=_DESTRUCTIVE)
     async def record_weight(
         account: str,
         weight_kg: float,
@@ -896,6 +913,8 @@ def _error(err: Exception, *, preview: bool = False) -> dict[str, Any]:
     message = short_error(str(err))
     logger.warning("Tool call failed: %s", message)
     result = {"status": "error", "error": message, "type": err.__class__.__name__}
+    if getattr(err, "outcome_unknown", False):
+        result["outcome_unknown"] = True
     if isinstance(err, AmbiguousFoodError):
         result.update(ambiguous=True, candidates=err.candidates)
         if preview:

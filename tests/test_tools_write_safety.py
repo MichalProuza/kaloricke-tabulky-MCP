@@ -13,10 +13,12 @@ from kaloricke_tabulky_mcp.tools import setup_tools
 class FakeMCP:
     def __init__(self) -> None:
         self.tools: dict[str, Any] = {}
+        self.annotations: dict[str, Any] = {}
 
-    def tool(self):
+    def tool(self, **kwargs):
         def decorator(func):
             self.tools[func.__name__] = func
+            self.annotations[func.__name__] = kwargs.get("annotations")
             return func
 
         return decorator
