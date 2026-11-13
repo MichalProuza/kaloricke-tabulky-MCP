@@ -15,7 +15,7 @@ import unicodedata
 from typing import Any
 from urllib.parse import urlencode, urljoin
 
-from aiohttp import ClientResponse, ClientSession, ClientTimeout, FormData
+from aiohttp import ClientError, ClientResponse, ClientSession, ClientTimeout, FormData
 
 from .clock import local_now, local_today
 from .diary import (
@@ -251,6 +251,18 @@ class AmbiguousFoodError(KalorickeTabulkyError):
         ]
 
 
+class KalorickeTabulkyNetworkError(KalorickeTabulkyError):
+    """Connection failure or timeout while talking to KT.
+
+    ``outcome_unknown`` is set when a write request may have reached KT before
+    the failure, so the caller must verify the diary before retrying.
+    """
+
+    def __init__(self, message: str, *, outcome_unknown: bool = False) -> None:
+        super().__init__(message)
+        self.outcome_unknown = outcome_unknown
+
+
 class InvalidAuthError(KalorickeTabulkyError):
     """Raised when credentials are rejected."""
 
@@ -370,7 +382,10 @@ class KalorickeTabulkyClient:
         async with self._auth_lock:
             if self._cookies is not None and generation != self._auth_generation:
                 return
-            await self._authenticate()
+            try:
+                await self._authenticate()
+            except (ClientError, TimeoutError) as err:
+                raise self._network_error(err, "login") from err
             self._auth_generation += 1
 
     async def _authenticate(self) -> None:
@@ -1056,10 +1071,27 @@ class KalorickeTabulkyClient:
             await self.authenticate(expected_generation=generation)
         generation = self._auth_generation
         try:
-            return await operation(method, url, **kwargs)
-        except SessionExpiredError:
-            await self.authenticate(expected_generation=generation)
-            return await operation(method, url, **kwargs)
+            try:
+                return await operation(method, url, **kwargs)
+            except SessionExpiredError:
+                await self.authenticate(expected_generation=generation)
+                return await operation(method, url, **kwargs)
+        except (ClientError, TimeoutError) as err:
+            # Every non-GET request in this client is a write.
+            raise self._network_error(
+                err, method, outcome_unknown=method.upper() != "GET"
+            ) from err
+
+    def _network_error(
+        self, err: Exception, action: str, *, outcome_unknown: bool = False
+    ) -> KalorickeTabulkyNetworkError:
+        detail = safe_text(str(err), self._sensitive_values()) or "no details"
+        message = f"Network error during KT {action} ({type(err).__name__}): {detail}"
+        if outcome_unknown:
+            message = (
+                "Write outcome unknown; check the diary before retrying. " + message
+            )
+        return KalorickeTabulkyNetworkError(message, outcome_unknown=outcome_unknown)
 
     async def _request_with_reauth(
         self, method: str, url: str, **kwargs: Any

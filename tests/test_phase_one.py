@@ -30,7 +30,7 @@ class ToolCollector:
     def __init__(self):
         self.tools = {}
 
-    def tool(self):
+    def tool(self, **kwargs):
         def register(func):
             self.tools[func.__name__] = func
             return func

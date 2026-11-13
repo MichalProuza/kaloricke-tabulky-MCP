@@ -54,7 +54,7 @@ MCP_HTTP_PORT=8080
 
 Aliases are normalized to lowercase underscores. Collisions such as `my-account` and `my_account` are rejected.
 `KT_ACCOUNT_<ALIAS>_PASSWORD_MD5` is optional and takes precedence over plaintext password when set. Treat it as password-equivalent secret material.
-When `MCP_BEARER_TOKEN` is set, MCP clients must send `Authorization: Bearer <token>` to `/mcp`. `/health` stays unauthenticated for container healthchecks.
+When `MCP_BEARER_TOKEN` is set, MCP clients must send `Authorization: Bearer <token>` to `/mcp`. `/health` stays unauthenticated for container healthchecks. It returns liveness and configured aliases only; cached auth diagnostics are available through the `health_check` MCP tool.
 
 `KT_TIMEZONE` is an IANA timezone (default `Europe/Prague`). Invalid names stop
 startup with a configuration error. Omitted dates use the current date in this

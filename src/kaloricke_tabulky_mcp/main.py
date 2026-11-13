@@ -70,7 +70,7 @@ def _add_health_route(mcp: FastMCP, account_registry: AccountRegistry) -> None:
                     "endpoint": "/mcp",
                     "bearer_auth": bool(account_registry.settings.mcp_bearer_token),
                 },
-                **account_registry.safe_health(),
+                **account_registry.safe_health(include_auth_diagnostics=False),
             },
             status_code=200,
         )
